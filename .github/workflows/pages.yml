@@ -4,7 +4,8 @@ on:
     branches: [main]
     paths:
       - index.html
-      - scripts/check.mjs
+      - 'scripts/**'
+      - package.json
       - .github/workflows/pages.yml
   workflow_dispatch:
 permissions:
@@ -21,7 +22,7 @@ jobs:
         with:
           node-version-file: .nvmrc
       - name: Verificar aplicação
-        run: npm run check
+        run: npm test
       - name: Preparar arquivos públicos
         run: |
           mkdir -p _site

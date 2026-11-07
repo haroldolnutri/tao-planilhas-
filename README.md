@@ -17,15 +17,15 @@ O servidor local atende somente o computador atual por padrão.
 ## Verificar
 
 ```sh
-npm run check
+npm test
 ```
 
-Confere a estrutura básica do HTML e a sintaxe dos scripts. A mesma verificação roda no GitHub Actions em pushes e pull requests. Esta verificação não substitui testes funcionais no navegador.
+Confere a estrutura básica do HTML, a sintaxe dos scripts e nove testes de regressão para cadastro, seleção de planos, geração, horários, registros, renderização segura, semanas e gráficos indisponíveis. A mesma verificação roda no GitHub Actions em pushes e pull requests. Esta verificação não substitui testes funcionais no navegador.
 
 ## Estrutura
 
 - `index.html`: entrada principal, com a aplicação original.
-- `Tao performance-(2).html`: arquivo original preservado como referência. Alterações futuras devem ser feitas em `index.html`.
+- `Tao performance-(2).html`: cópia atualizada do HTML enviado. A entrada de hospedagem é `index.html`; mantenha as duas cópias sincronizadas.
 - `scripts/serve.mjs`: servidor local sem dependências.
 - `scripts/check.mjs`: verificação do código.
 

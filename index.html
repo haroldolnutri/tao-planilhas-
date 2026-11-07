@@ -329,6 +329,10 @@ table{border-collapse:separate;border-spacing:0}.students-table{overflow:hidden}
 @media(max-width:760px){.topbar{min-height:68px}.brand .sub{display:none}.brand .brandtext{border-left:none;padding-left:0}.logo-plate{padding:5px 9px;border-radius:10px}.brand .logo{height:38px}.role-switch button{padding:7px 11px}.layout{display:block}.sidebar{position:sticky;top:68px;z-index:15;width:100%;padding:9px 12px;gap:6px;background:color-mix(in srgb,var(--ink) 92%,transparent);backdrop-filter:blur(16px)}.sidebar button{flex:0 0 auto;padding:9px 12px;white-space:nowrap}.sidebar button.active{border-left:1px solid color-mix(in srgb,var(--amber) 35%,var(--line));border-bottom:2px solid var(--amber)}main{padding:22px 14px 56px}.grid-2,.grid-3{grid-template-columns:1fr}.grid-4{grid-template-columns:repeat(2,minmax(0,1fr))}.tile{padding:15px}.tile .value{font-size:25px}.card{padding:17px}.log-form{grid-template-columns:1fr 1fr}table{min-width:620px}.card:has(table){overflow-x:auto}.toast{left:14px;right:14px;bottom:14px;text-align:center}}
 @media(max-width:430px){.grid-4{grid-template-columns:1fr}.log-form{grid-template-columns:1fr}.log-form .full{grid-column:auto}.role-switch button{font-size:12px}.icon-btn{width:36px;height:36px}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important}}
+@media(max-width:760px){
+  .sidebar .student-pick{display:block;flex:0 0 180px;margin:0;padding:0;border:0}
+  main{overflow-x:auto}
+}
 </style>
 </head>
 <body data-theme="dark">
@@ -370,28 +374,34 @@ const LOGO_PRINT_B64 = "iVBORw0KGgoAAAANSUhEUgAAA4QAAAI7CAIAAAA7x8J4AAEAAElEQVR4
 const STORE_KEY = "passada_v1";
 let DB = { students: {}, plans: {}, logs: {}, config: { theme: "dark", role: "aluno", activeStudentId: null } };
 
+function escapeHTML(value){
+  return String(value ?? "").replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+function normalizeDB(value){
+  const object = v=>v && typeof v === "object" && !Array.isArray(v);
+  if(!object(value)) throw new Error("Dados salvos inválidos");
+  const config = object(value.config) ? value.config : {};
+  return {students:object(value.students)?value.students:{}, plans:object(value.plans)?value.plans:{}, logs:object(value.logs)?value.logs:{},
+    config:{theme:config.theme === "light" ? "light" : "dark", role:config.role === "treinador" ? "treinador" : "aluno", activeStudentId:config.activeStudentId || null}};
+}
 async function loadDB(){
   try{
     if(window.storage?.get){
       const res = await window.storage.get(STORE_KEY);
-      if(res?.value) DB = JSON.parse(res.value);
+      if(res?.value) DB = normalizeDB(JSON.parse(res.value));
     }else{
       const saved = localStorage.getItem(STORE_KEY);
-      if(saved) DB = JSON.parse(saved);
+      if(saved) DB = normalizeDB(JSON.parse(saved));
     }
-  }catch(e){ /* chave ainda não existe — segue com DB vazio */ }
+  }catch(e){ console.error("Falha ao carregar dados", e); showToast("Os dados salvos não puderam ser carregados. Verifique o armazenamento antes de cadastrar novamente."); }
 }
-let saveTimer = null;
 function saveDB(){
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(async ()=>{
-    try{
-      const value = JSON.stringify(DB);
-      if(window.storage?.set) await window.storage.set(STORE_KEY, value);
-      else localStorage.setItem(STORE_KEY, value);
-    }
-    catch(e){ console.error("Falha ao salvar", e); showToast("Não foi possível salvar agora. Tente novamente."); }
-  }, 250);
+  const value = JSON.stringify(DB);
+  const failed = e=>{ console.error("Falha ao salvar", e); showToast("Não foi possível salvar agora. Tente novamente."); };
+  try{
+    if(window.storage?.set) Promise.resolve(window.storage.set(STORE_KEY, value)).catch(failed);
+    else localStorage.setItem(STORE_KEY, value);
+  }catch(e){ failed(e); }
 }
 
 function uid(prefix){ return prefix + "_" + Math.random().toString(36).slice(2,9); }
@@ -410,15 +420,17 @@ function WEEKDAY_SORT_ORDER(day){
   return i === -1 ? 99 : i;
 }
 function fmtPace(secPerKm){
-  if(!secPerKm || !isFinite(secPerKm)) return "—";
-  const m = Math.floor(secPerKm/60), s = Math.round(secPerKm%60);
+  if(!Number.isFinite(secPerKm) || secPerKm <= 0) return "—";
+  const total = Math.round(secPerKm);
+  const m = Math.floor(total/60), s = total%60;
   return m + ":" + String(s).padStart(2,"0") + "/km";
 }
 function parsePaceToSec(str){
   // aceita "5:30" -> 330
   const m = String(str).trim().match(/^(\d+):(\d{1,2})$/);
-  if(!m) return null;
-  return (+m[1])*60 + (+m[2]);
+  if(!m || +m[2] >= 60) return null;
+  const value = (+m[1])*60 + (+m[2]);
+  return value > 0 ? value : null;
 }
 
 /* ---------------- Zonas de FC (percentual da FC máx estimada) ---------------- */
@@ -440,7 +452,7 @@ function hrZones(age){
    de um resultado recente. É uma estimativa, não uma promessa de desempenho,
    e deve sempre poder ser revisada manualmente pelo treinador. */
 function estimatePaces(recentDistM, recentTimeS){
-  if(!recentDistM || !recentTimeS) return null;
+  if(!Number.isFinite(recentDistM) || !Number.isFinite(recentTimeS) || recentDistM <= 0 || recentTimeS <= 0) return null;
   const riegel = (d2) => recentTimeS * Math.pow(d2/recentDistM, 1.06);
   const t10k = riegel(10000);
   const t5k  = riegel(5000);
@@ -637,12 +649,12 @@ function generatePlan(student){
     return CANON[k] || (d ? String(d).trim() : "");
   };
   const seen = new Set();
-  const cleaned = (rawDays||[]).map(norm).filter(Boolean).filter(d=>{
+  const cleaned = (rawDays||[]).map(norm).filter(d=>WEEK_ORDER.includes(d)).filter(d=>{
     if(seen.has(d)) return false;
     seen.add(d); return true;
   });
   const DEFAULT_ORDER = ["Ter","Qui","Sáb","Dom","Seg","Qua","Sex"];
-  const need = Math.max(freq||0, cleaned.length, 1);
+  const need = Math.max(2, Math.min(4, Number(freq) || 3));
   if(cleaned.length < need){
     for(const d of DEFAULT_ORDER){
       if(cleaned.length >= need) break;
@@ -654,7 +666,7 @@ function generatePlan(student){
   const known = cleaned.filter(d=>WEEK_ORDER.includes(d))
     .sort((a,b)=>WEEK_ORDER.indexOf(a)-WEEK_ORDER.indexOf(b));
   const unknown = cleaned.filter(d=>!WEEK_ORDER.includes(d));
-  return [...known, ...unknown];
+  return [...known, ...unknown].slice(0, need);
 }
 
 const days = normalizeAvailableDays(student.availableDays, student.freq);
@@ -739,10 +751,10 @@ const days = normalizeAvailableDays(student.availableDays, student.freq);
     const dayAssignment = new Array(skeleton.length);
     const usedDays = new Set();
     const longaoIdx = skeleton.indexOf("longao");
-    const longaoDay = longaoIdx > -1 ? (days[days.length-1] || WEEKDAY_CANON_ORDER[WEEKDAY_CANON_ORDER.length-1]) : null;
+    const longaoDay = longaoIdx > -1 ? (days.includes("Dom") ? "Dom" : days.includes("Sáb") ? "Sáb" : days[days.length-1]) : null;
     if(longaoIdx > -1){ dayAssignment[longaoIdx] = longaoDay; usedDays.add(longaoDay); }
     const otherIdxs = skeleton.map((_,i)=>i).filter(i=>i!==longaoIdx);
-    const remainingDays = (longaoIdx > -1 ? days.slice(0,-1) : days.slice()).filter(d=>!usedDays.has(d));
+    const remainingDays = (longaoIdx > -1 ? days.filter(d=>d!==longaoDay) : days.slice()).filter(d=>!usedDays.has(d));
     const fallbackPool = WEEKDAY_CANON_ORDER.filter(d=>!usedDays.has(d) && !remainingDays.includes(d));
     let ptr = 0, fptr = 0;
     otherIdxs.forEach((sIdx)=>{
@@ -857,7 +869,7 @@ async function init(){
   document.querySelectorAll("#roleSwitch button").forEach(b=>{
     b.classList.toggle("active", b.dataset.role === (DB.config.role||"aluno"));
   });
-  if(!DB.config.activeStudentId){
+  if(!DB.students[DB.config.activeStudentId]){
     const ids = Object.keys(DB.students);
     if(ids.length) DB.config.activeStudentId = ids[0];
   }
@@ -878,8 +890,9 @@ async function init(){
 }
 
 function currentStudent(){ return DB.students[DB.config.activeStudentId]; }
-function currentPlan(){ const s = currentStudent(); return s ? Object.values(DB.plans).find(p=>p.studentId===s.id) : null; }
-function studentHasPlan(s){ return s && Object.values(DB.plans).some(p=>p.studentId===s.id); }
+function planForStudent(id){ return Object.values(DB.plans).filter(p=>p.studentId===id && !p.isTemplate).at(-1) || null; }
+function currentPlan(){ return planForStudent(DB.config.activeStudentId); }
+function studentHasPlan(s){ return s && !!planForStudent(s.id); }
 
 /* ============================ NAVEGAÇÃO / RENDER ============================ */
 function render(){
@@ -900,17 +913,19 @@ function renderSidebar(){
   sb.innerHTML = tabs.map(([id,label])=>`<button data-view="${id}" class="${UI.view===id?'active':''}">${label}</button>`).join("");
 
   if(role === "treinador" && Object.keys(DB.students).length){
-    const opts = Object.values(DB.students).map(s=>`<option value="${s.id}" ${s.id===DB.config.activeStudentId?'selected':''}>${s.name}</option>`).join("");
+    const opts = Object.values(DB.students).map(s=>`<option value="${escapeHTML(s.id)}" ${s.id===DB.config.activeStudentId?'selected':''}>${escapeHTML(s.name)}</option>`).join("");
     sb.innerHTML += `<div class="student-pick"><label>Aluno em foco</label><select id="studentPick">${opts}</select></div>`;
   }
   sb.querySelectorAll("button[data-view]").forEach(b=>{
     b.onclick = ()=>{ UI.view = b.dataset.view; render(); };
   });
   const pick = document.getElementById("studentPick");
-  if(pick) pick.onchange = (e)=>{ DB.config.activeStudentId = e.target.value; saveDB(); render(); };
+  if(pick) pick.onchange = (e)=>{ DB.config.activeStudentId = e.target.value; UI.week = 1; saveDB(); render(); };
 }
 
 function renderMain(){
+  Object.values(CHART_INSTANCES).forEach(chart=>chart.destroy());
+  CHART_INSTANCES = {};
   const main = document.getElementById("main");
   const role = DB.config.role || "aluno";
   let html = "";
@@ -1016,17 +1031,17 @@ function viewAvaliacao(asTreinador){
 }
 
 function parseTimeStr(str){
-  if(!str) return null;
-  const parts = str.trim().split(":").map(Number);
-  if(parts.some(isNaN)) return null;
-  if(parts.length===2) return parts[0]*60+parts[1];
-  if(parts.length===3) return parts[0]*3600+parts[1]*60+parts[2];
-  return null;
+  const text = String(str || "").trim();
+  if(!/^\d+:\d{1,2}(?::\d{1,2})?$/.test(text)) return null;
+  const parts = text.split(":").map(Number);
+  if(parts.at(-1) >= 60 || (parts.length === 3 && parts[1] >= 60)) return null;
+  const value = parts.length === 2 ? parts[0]*60+parts[1] : parts[0]*3600+parts[1]*60+parts[2];
+  return value > 0 ? value : null;
 }
 function secToTimeStr(sec){
-  if(!sec && sec !== 0) return "";
-  const m = Math.floor(sec/60), s = Math.round(sec%60);
-  return m + ":" + String(s).padStart(2,"0");
+  if(sec == null || !Number.isFinite(sec) || sec < 0) return "";
+  const total = Math.round(sec);
+  return Math.floor(total/60) + ":" + String(total%60).padStart(2,"0");
 }
 
 /* ============================ VIEW: EDITAR ALUNO (treinador) ============================ */
@@ -1035,7 +1050,7 @@ function viewEditarAluno(){
   if(!s) return `<div class="empty">Selecione um aluno na barra lateral para editar os dados dele.</div>`;
   const sel = (val,opt)=> val===opt? "selected":"";
   return `
-  <div class="section-title"><h2>Editar dados de ${s.name}</h2></div>
+  <div class="section-title"><h2>Editar dados de ${escapeHTML(s.name)}</h2></div>
   <p class="hint" style="max-width:620px;margin-bottom:16px;">
     Altere o que for preciso. "Salvar alterações" só atualiza o cadastro do aluno —
     a planilha atual não é modificada. Use "Salvar e gerar nova planilha" se quiser
@@ -1043,8 +1058,8 @@ function viewEditarAluno(){
   </p>
   <form id="formEditarAluno">
     <div class="grid grid-3">
-      <div class="field"><label>Nome</label><input name="name" required value="${s.name||''}"></div>
-      <div class="field"><label>Idade</label><input name="age" type="number" min="10" max="90" required value="${s.age??''}"></div>
+      <div class="field"><label>Nome</label><input name="name" required value="${escapeHTML(s.name||'')}"></div>
+      <div class="field"><label>Idade</label><input name="age" type="number" min="10" max="90" required value="${escapeHTML(s.age??'')}"></div>
       <div class="field"><label>Sexo (para zona de FC estimada)</label>
         <select name="sex">
           <option value="F" ${sel(s.sex,'F')}>Feminino</option>
@@ -1054,7 +1069,7 @@ function viewEditarAluno(){
       </div>
     </div>
     <div class="grid grid-3">
-      <div class="field"><label>Peso (kg) — opcional</label><input name="weight" type="number" min="30" max="200" value="${s.weight??''}"></div>
+      <div class="field"><label>Peso (kg) — opcional</label><input name="weight" type="number" min="30" max="200" value="${escapeHTML(s.weight??'')}"></div>
       <div class="field"><label>Nível</label>
         <select name="level">
           <option value="iniciante" ${sel(s.level,'iniciante')}>Iniciante</option>
@@ -1080,7 +1095,7 @@ function viewEditarAluno(){
           <option value="21k" ${sel(s.goal,'21k')}>Meia maratona (21,1 km)</option>
         </select>
       </div>
-      <div class="field"><label>Data prevista da prova (opcional)</label><input name="raceDate" type="date" value="${s.raceDate||''}"></div>
+      <div class="field"><label>Data prevista da prova (opcional)</label><input name="raceDate" type="date" value="${escapeHTML(s.raceDate||'')}"></div>
       <div class="field"><label>Frequência de treinos por semana</label>
         <select name="freq">
           <option value="2" ${sel(String(s.freq),'2')}>2x</option>
@@ -1089,23 +1104,23 @@ function viewEditarAluno(){
         </select>
       </div>
     </div>
-    <div class="field"><label>Dias disponíveis (separe por vírgula, ex.: Ter, Qui, Sáb, Dom)</label><input name="days" value="${(s.availableDays||[]).join(', ')}" placeholder="Ter, Qui, Sáb"></div>
+    <div class="field"><label>Dias disponíveis (separe por vírgula, ex.: Ter, Qui, Sáb, Dom)</label><input name="days" value="${escapeHTML((s.availableDays||[]).join(', '))}" placeholder="Ter, Qui, Sáb"></div>
     <div class="grid grid-3">
-      <div class="field"><label>Volume médio nas últimas 4 semanas (km/semana)</label><input name="recentVolumeKm" type="number" min="0" step="0.5" value="${s.recentVolumeKm??''}"></div>
-      <div class="field"><label>Maior distância percorrida recentemente (km)</label><input name="recentLongestKm" type="number" min="0" step="0.5" value="${s.recentLongestKm??''}"></div>
-      <div class="field"><label>Percepção de esforço habitual (0-10)</label><input name="rpeUsual" type="number" min="0" max="10" value="${s.rpeUsual??''}"></div>
+      <div class="field"><label>Volume médio nas últimas 4 semanas (km/semana)</label><input name="recentVolumeKm" type="number" min="0" step="0.5" value="${escapeHTML(s.recentVolumeKm??'')}"></div>
+      <div class="field"><label>Maior distância percorrida recentemente (km)</label><input name="recentLongestKm" type="number" min="0" step="0.5" value="${escapeHTML(s.recentLongestKm??'')}"></div>
+      <div class="field"><label>Percepção de esforço habitual (0-10)</label><input name="rpeUsual" type="number" min="0" max="10" value="${escapeHTML(s.rpeUsual??'')}"></div>
     </div>
     <fieldset>
       <legend>Resultado recente (opcional — usado para estimar ritmos)</legend>
       <div class="grid grid-3">
-        <div class="field"><label>Distância da prova/teste (m)</label><input name="recentDistM" type="number" placeholder="ex.: 5000" value="${s.recentDistM??''}"></div>
+        <div class="field"><label>Distância da prova/teste (m)</label><input name="recentDistM" type="number" placeholder="ex.: 5000" value="${escapeHTML(s.recentDistM??'')}"></div>
         <div class="field"><label>Tempo (mm:ss ou hh:mm:ss)</label><input name="recentTimeStr" placeholder="ex.: 28:40" value="${secToTimeStr(s.recentTimeS)}"></div>
-        <div class="field"><label>FC média no esforço (opcional)</label><input name="recentHr" type="number" placeholder="bpm" value="${s.recentHr??''}"></div>
+        <div class="field"><label>FC média no esforço (opcional)</label><input name="recentHr" type="number" placeholder="bpm" value="${escapeHTML(s.recentHr??'')}"></div>
       </div>
     </fieldset>
     <div class="grid grid-2">
-      <div class="field"><label>Histórico de lesões, dores ou limitações</label><textarea name="injuries" rows="2" placeholder="Descreva se houver, ou deixe em branco">${s.injuries||''}</textarea></div>
-      <div class="field"><label>Sono, recuperação e rotina</label><textarea name="sleepRoutine" rows="2" placeholder="Ex.: durmo bem, 7h por noite">${s.sleepRoutine||''}</textarea></div>
+      <div class="field"><label>Histórico de lesões, dores ou limitações</label><textarea name="injuries" rows="2" placeholder="Descreva se houver, ou deixe em branco">${escapeHTML(s.injuries||'')}</textarea></div>
+      <div class="field"><label>Sono, recuperação e rotina</label><textarea name="sleepRoutine" rows="2" placeholder="Ex.: durmo bem, 7h por noite">${escapeHTML(s.sleepRoutine||'')}</textarea></div>
     </div>
     <div class="field"><label>Experiência com musculação / treino de força</label>
       <select name="strength">
@@ -1124,7 +1139,7 @@ function viewEditarAluno(){
 /* ============================ VIEW: CALENDÁRIO DO ALUNO ============================ */
 function viewRitmoEstimado(s){
   if(!s) return `<div class="empty">Selecione um aluno para ver o ritmo estimado.</div>`;
-  const plan = Object.values(DB.plans).find(p=>p.studentId===s.id);
+  const plan = planForStudent(s.id);
   const paces = estimatePaces(s.recentDistM, s.recentTimeS);
   const zones = s.age ? hrZones(s.age) : null;
 
@@ -1157,7 +1172,7 @@ function viewRitmoEstimado(s){
       <div class="grid grid-3">
         <div><span class="lbl">5 km previsto</span><br>${secToTimeStr(paces.predicted5k)}</div>
         <div><span class="lbl">10 km previsto</span><br>${secToTimeStr(paces.predicted10k)}</div>
-        <div><span class="lbl">Ritmo de limiar</span><br>${fmtPace(paces.threshold)}/km</div>
+        <div><span class="lbl">Ritmo de limiar</span><br>${fmtPace(paces.threshold)}</div>
       </div>
     </div>
   ` : `
@@ -1187,9 +1202,9 @@ function viewRitmoEstimado(s){
     const wk = plan.weeks.find(w=>w.weekNumber===(UI.week||1)) || plan.weeks[0];
     const items = wk.sessions.map(ses=>`
       <div class="ref-item">
-        <div class="src">${ses.day || "—"}</div>
-        <h4>${ses.name}</h4>
-        <p>🏃 ${ses.pace || "—"} ${ses.hrZone? " · ❤ "+ses.hrZone : ""} ${ses.rpe? " · Esforço "+ses.rpe : ""}</p>
+        <div class="src">${escapeHTML(ses.day || "—")}</div>
+        <h4>${escapeHTML(ses.name)}</h4>
+        <p>🏃 ${escapeHTML(ses.pace || "—")} ${ses.hrZone? " · ❤ "+escapeHTML(ses.hrZone) : ""} ${ses.rpe? " · Esforço "+escapeHTML(ses.rpe) : ""}</p>
       </div>`).join("");
     return `
     <div class="card" style="margin-top:16px;">
@@ -1200,10 +1215,10 @@ function viewRitmoEstimado(s){
   })() : "";
 
   return `
-  <div class="section-title"><h2>Ritmo estimado${s.name? " — "+s.name : ""}</h2></div>
+  <div class="section-title"><h2>Ritmo estimado${s.name? " — "+escapeHTML(s.name) : ""}</h2></div>
   <p class="hint" style="max-width:680px;margin-bottom:16px;">
     Ritmos de referência calculados a partir dos dados do aluno, para consulta rápida antes ou
-    durante o treino. ${plan && plan.paceBasis ? plan.paceBasis : ""}
+    durante o treino. ${escapeHTML(plan?.paceBasis)}
   </p>
   ${paceCards}
   ${hrCards}
@@ -1215,11 +1230,11 @@ function viewCalendarioAluno(s){
   const plan = currentPlan();
   if(!plan) return viewAvaliacao();
   if(!isPublished(plan)){
-    return `<div class="section-title"><h2>Plano de ${s.name}</h2></div>
+    return `<div class="section-title"><h2>Plano de ${escapeHTML(s.name)}</h2></div>
     <div class="empty">Seu treinador ainda está preparando ou revisando sua planilha.<br>Assim que for publicada, ela aparece aqui.</div>`;
   }
-  UI.week = UI.week || 1;
   const week = plan.weeks.find(w=>w.weekNumber===UI.week) || plan.weeks[0];
+  UI.week = week.weekNumber;
   const alerts = computeAlerts(s, plan, DB.logs);
 
   const strip = plan.weeks.map(w=>`
@@ -1233,54 +1248,54 @@ function viewCalendarioAluno(s){
   const sessionsHtml = sortedSessions.map(ses=>{
     const log = Object.values(DB.logs).find(l=>l.studentId===s.id && l.sessionId===ses.id);
     return `
-    <div class="session" data-ses="${ses.id}">
-      <div class="session-head" data-toggle="${ses.id}">
+    <div class="session" data-ses="${escapeHTML(ses.id)}">
+      <div class="session-head" data-toggle="${escapeHTML(ses.id)}">
         <div>
-          <div class="day">${ses.day}${dayCounts[ses.day]>1? ' <span class="badge warn" title="Mais de um treino caiu neste dia">2 treinos</span>' : ''}</div>
-          <h4>${ses.name}</h4>
+          <div class="day">${escapeHTML(ses.day)}${dayCounts[ses.day]>1? ' <span class="badge warn" title="Mais de um treino caiu neste dia">'+dayCounts[ses.day]+' treinos</span>' : ''}</div>
+          <h4>${escapeHTML(ses.name)}</h4>
         </div>
         <div>${log ? statusBadge(log.status) : `<span class="badge muted">Pendente</span>`}</div>
       </div>
       <div class="session-meta">
         <span>⏱ ${ses.duration? ses.duration+' min' : '—'}</span>
         <span>📏 ${ses.distance? fmtKm(ses.distance) : '—'}</span>
-        <span class="pace-tag">🏃 ${ses.pace}</span>
-        <span>❤ ${ses.hrZone}</span>
-        <span>Esforço ${ses.rpe}</span>
+        <span class="pace-tag">🏃 ${escapeHTML(ses.pace)}</span>
+        <span>❤ ${escapeHTML(ses.hrZone)}</span>
+        <span>Esforço ${escapeHTML(ses.rpe)}</span>
       </div>
       <div class="session-body">
-        <p><span class="lbl">Objetivo</span><br>${ses.objective}</p>
-        <p><span class="lbl">Aquecimento</span><br>${ses.warmup}</p>
-        <p><span class="lbl">Parte principal</span><br>${ses.main}</p>
-        <p><span class="lbl">Desaquecimento</span><br>${ses.cooldown}</p>
-        <p><span class="lbl">Recuperação entre estímulos</span><br>${ses.recovery}</p>
-        <p><span class="lbl">Observações do treinador</span><br>${ses.notes}</p>
-        <p><span class="lbl">Alternativa mais leve</span><br>${ses.alternative}</p>
+        <p><span class="lbl">Objetivo</span><br>${escapeHTML(ses.objective)}</p>
+        <p><span class="lbl">Aquecimento</span><br>${escapeHTML(ses.warmup)}</p>
+        <p><span class="lbl">Parte principal</span><br>${escapeHTML(ses.main)}</p>
+        <p><span class="lbl">Desaquecimento</span><br>${escapeHTML(ses.cooldown)}</p>
+        <p><span class="lbl">Recuperação entre estímulos</span><br>${escapeHTML(ses.recovery)}</p>
+        <p><span class="lbl">Observações do treinador</span><br>${escapeHTML(ses.notes)}</p>
+        <p><span class="lbl">Alternativa mais leve</span><br>${escapeHTML(ses.alternative)}</p>
         <hr class="divider">
         <div class="status-row">
-          <button data-status="concluido" data-ses="${ses.id}" class="${log&&log.status==='concluido'?'sel-done':''}">Concluído</button>
-          <button data-status="parcial" data-ses="${ses.id}" class="${log&&log.status==='parcial'?'sel-partial':''}">Parcial</button>
-          <button data-status="nao_realizado" data-ses="${ses.id}" class="${log&&log.status==='nao_realizado'?'sel-skip':''}">Não realizado</button>
+          <button data-status="concluido" data-ses="${escapeHTML(ses.id)}" class="${log&&log.status==='concluido'?'sel-done':''}">Concluído</button>
+          <button data-status="parcial" data-ses="${escapeHTML(ses.id)}" class="${log&&log.status==='parcial'?'sel-partial':''}">Parcial</button>
+          <button data-status="nao_realizado" data-ses="${escapeHTML(ses.id)}" class="${log&&log.status==='nao_realizado'?'sel-skip':''}">Não realizado</button>
         </div>
-        <div class="log-form" id="log_${ses.id}">
-          <div class="field"><label>Distância (km)</label><input type="number" step="0.1" id="d_${ses.id}" value="${log?.distanceReal ?? ''}"></div>
-          <div class="field"><label>Duração (min)</label><input type="number" id="du_${ses.id}" value="${log?.durationReal ?? ''}"></div>
-          <div class="field"><label>Ritmo médio (mm:ss)</label><input id="p_${ses.id}" placeholder="ex.: 6:10" value="${log?.paceReal ?? ''}"></div>
-          <div class="field"><label>FC média (bpm)</label><input type="number" id="hr_${ses.id}" value="${log?.hr ?? ''}"></div>
-          <div class="field"><label>Esforço (0-10)</label><input type="number" min="0" max="10" id="rpe_${ses.id}" value="${log?.rpe ?? ''}"></div>
-          <div class="field"><label>Dor (0-10)</label><input type="number" min="0" max="10" id="pain_${ses.id}" value="${log?.pain ?? ''}"></div>
-          <div class="field"><label>Fadiga (0-10)</label><input type="number" min="0" max="10" id="fat_${ses.id}" value="${log?.fatigue ?? ''}"></div>
-          <div class="field"><label>Sono (0-5)</label><input type="number" min="0" max="5" id="sleep_${ses.id}" value="${log?.sleep ?? ''}"></div>
-          <div class="field full"><label>Satisfação (0-5)</label><input type="number" min="0" max="5" id="sat_${ses.id}" value="${log?.satisfaction ?? ''}"></div>
-          <div class="field full"><label>Observações</label><textarea rows="2" id="notes_${ses.id}">${log?.notes ?? ''}</textarea></div>
-          <div class="field full"><button class="btn secondary" data-save="${ses.id}">Salvar registro</button></div>
+        <div class="log-form" id="log_${escapeHTML(ses.id)}">
+          <div class="field"><label>Distância (km)</label><input type="number" step="0.1" id="d_${escapeHTML(ses.id)}" value="${escapeHTML(log?.distanceReal ?? '')}"></div>
+          <div class="field"><label>Duração (min)</label><input type="number" id="du_${escapeHTML(ses.id)}" value="${escapeHTML(log?.durationReal ?? '')}"></div>
+          <div class="field"><label>Ritmo médio (mm:ss)</label><input id="p_${escapeHTML(ses.id)}" placeholder="ex.: 6:10" value="${escapeHTML(log?.paceReal ?? '')}"></div>
+          <div class="field"><label>FC média (bpm)</label><input type="number" id="hr_${escapeHTML(ses.id)}" value="${escapeHTML(log?.hr ?? '')}"></div>
+          <div class="field"><label>Esforço (0-10)</label><input type="number" min="0" max="10" id="rpe_${escapeHTML(ses.id)}" value="${escapeHTML(log?.rpe ?? '')}"></div>
+          <div class="field"><label>Dor (0-10)</label><input type="number" min="0" max="10" id="pain_${escapeHTML(ses.id)}" value="${escapeHTML(log?.pain ?? '')}"></div>
+          <div class="field"><label>Fadiga (0-10)</label><input type="number" min="0" max="10" id="fat_${escapeHTML(ses.id)}" value="${escapeHTML(log?.fatigue ?? '')}"></div>
+          <div class="field"><label>Sono (0-5)</label><input type="number" min="0" max="5" id="sleep_${escapeHTML(ses.id)}" value="${escapeHTML(log?.sleep ?? '')}"></div>
+          <div class="field full"><label>Satisfação (0-5)</label><input type="number" min="0" max="5" id="sat_${escapeHTML(ses.id)}" value="${escapeHTML(log?.satisfaction ?? '')}"></div>
+          <div class="field full"><label>Observações</label><textarea rows="2" id="notes_${escapeHTML(ses.id)}">${escapeHTML(log?.notes ?? '')}</textarea></div>
+          <div class="field full"><button class="btn secondary" data-save="${escapeHTML(ses.id)}">Salvar registro</button></div>
         </div>
       </div>
     </div>`;
   }).join("");
 
   return `
-  <div class="section-title"><h2>Plano de ${s.name}</h2><span class="count">${plan.range.label} · ${plan.totalWeeks} semanas · publicado pelo treinador</span></div>
+  <div class="section-title"><h2>Plano de ${escapeHTML(s.name)}</h2><span class="count">${plan.range.label} · ${plan.totalWeeks} semanas · publicado pelo treinador</span></div>
   ${alerts.map(a=>`<div class="alert ${a.level==='warn'?'warn':''}"><div class="t">${a.title}</div>${a.text}</div>`).join("")}
   <div class="btn-row no-print" style="margin-bottom:14px;">
     <button class="btn secondary" id="btnExportCsv">Exportar planilha (CSV)</button>
@@ -1336,7 +1351,7 @@ function buildPrintHTML(s, plan){
     return `<tr class="${rowClass}">
       <td><span class="print-phase-dot" style="background:${dotColor};"></span>Semana ${w.weekNumber}</td>
       <td>${labelFase(w)}</td>
-      <td>${w.sessions.map(x=>x.day||'—').join(", ")}</td>
+      <td>${w.sessions.map(x=>escapeHTML(x.day||'—')).join(", ")}</td>
       <td>${fmtKm(w.totalKm)}</td>
       <td>${done}/${w.sessions.length}</td>
     </tr>`;
@@ -1364,22 +1379,22 @@ function buildPrintHTML(s, plan){
 
       const stats = [
         ses.distance!=null? `<div class="print-stat">📏 <b>${fmtKm(ses.distance)}</b></div>` : "",
-        ses.duration!=null? `<div class="print-stat">⏱ <b>${ses.duration} min</b></div>` : "",
-        ses.pace? `<div class="print-stat">🎯 <b>${ses.pace}</b></div>` : "",
-        ses.hrZone? `<div class="print-stat">❤ ${ses.hrZone}</div>` : "",
-        ses.rpe? `<div class="print-stat">🔋 Esforço ${ses.rpe}</div>` : "",
+        ses.duration!=null? `<div class="print-stat">⏱ <b>${escapeHTML(ses.duration)} min</b></div>` : "",
+        ses.pace? `<div class="print-stat">🎯 <b>${escapeHTML(ses.pace)}</b></div>` : "",
+        ses.hrZone? `<div class="print-stat">❤ ${escapeHTML(ses.hrZone)}</div>` : "",
+        ses.rpe? `<div class="print-stat">🔋 Esforço ${escapeHTML(ses.rpe)}</div>` : "",
       ].join("");
 
       const steps = [
-        ses.warmup? `<li><b>Aquecimento</b>${ses.warmup}</li>` : "",
-        ses.main? `<li><b>Parte principal</b>${ses.main}</li>` : "",
-        ses.cooldown? `<li><b>Desaquecimento</b>${ses.cooldown}</li>` : "",
+        ses.warmup? `<li><b>Aquecimento</b>${escapeHTML(ses.warmup)}</li>` : "",
+        ses.main? `<li><b>Parte principal</b>${escapeHTML(ses.main)}</li>` : "",
+        ses.cooldown? `<li><b>Desaquecimento</b>${escapeHTML(ses.cooldown)}</li>` : "",
       ].join("");
 
       const extraLines = [
-        ses.recovery && ses.recovery !== "—" ? `<div><b>Recuperação:</b> ${ses.recovery}</div>` : "",
-        ses.notes? `<div><b>Observações do treinador:</b> ${ses.notes}</div>` : "",
-        ses.alternative? `<div><b>Alternativa mais leve:</b> ${ses.alternative}</div>` : "",
+        ses.recovery && ses.recovery !== "—" ? `<div><b>Recuperação:</b> ${escapeHTML(ses.recovery)}</div>` : "",
+        ses.notes? `<div><b>Observações do treinador:</b> ${escapeHTML(ses.notes)}</div>` : "",
+        ses.alternative? `<div><b>Alternativa mais leve:</b> ${escapeHTML(ses.alternative)}</div>` : "",
       ].join("");
 
       const logHtml = log ? `
@@ -1388,7 +1403,7 @@ function buildPrintHTML(s, plan){
           <div class="print-log-grid">
             <span>Distância <b>${log.distanceReal!=null? fmtKm(log.distanceReal):'—'}</b></span>
             <span>Duração <b>${log.durationReal!=null? log.durationReal+' min':'—'}</b></span>
-            <span>Ritmo <b>${log.paceReal||'—'}</b></span>
+            <span>Ritmo <b>${escapeHTML(log.paceReal||'—')}</b></span>
             <span>FC <b>${log.hr!=null? log.hr+' bpm':'—'}</b></span>
             <span>Esforço <b>${log.rpe!=null? log.rpe:'—'}</b></span>
             <span>Dor <b>${log.pain!=null? log.pain:'—'}</b></span>
@@ -1396,19 +1411,19 @@ function buildPrintHTML(s, plan){
             <span>Sono <b>${log.sleep!=null? log.sleep:'—'}</b></span>
             <span>Satisfação <b>${log.satisfaction!=null? log.satisfaction:'—'}</b></span>
           </div>
-          ${log.notes? `<div class="print-log-note">Obs. do aluno: ${log.notes}</div>` : ''}
+          ${log.notes? `<div class="print-log-note">Obs. do aluno: ${escapeHTML(log.notes)}</div>` : ''}
         </div>` : `<div class="print-log print-log-pending">Ainda não registrado pelo aluno.</div>`;
 
       return `
       <div class="print-session" style="border-left-color:${tagColor};">
         <div class="print-session-head">
-          <h3>${ses.day || '—'} — ${ses.name}</h3>
+          <h3>${escapeHTML(ses.day || '—')} — ${escapeHTML(ses.name)}</h3>
           <span class="print-session-tag" style="background:${tagColor};">${tagLabel}</span>
         </div>
         <div class="print-stats-row">${stats}</div>
         <ol class="print-steps">${steps}</ol>
         ${extraLines? `<div class="print-extra">${extraLines}</div>` : ""}
-        ${ses.objective? `<div class="print-extra" style="margin-top:6px;"><div><b>Objetivo:</b> ${ses.objective}</div></div>` : ""}
+        ${ses.objective? `<div class="print-extra" style="margin-top:6px;"><div><b>Objetivo:</b> ${escapeHTML(ses.objective)}</div></div>` : ""}
         ${logHtml}
       </div>`;
     }).join("");
@@ -1449,10 +1464,10 @@ function buildPrintHTML(s, plan){
     <img class="print-logo" src="data:image/png;base64,${LOGO_PRINT_B64}" alt="TAO Performance">
     <h1>Planilha de treino de corrida</h1>
     <div class="print-meta">
-      <div><strong>Aluno:</strong> ${s.name}</div>
+      <div><strong>Aluno:</strong> ${escapeHTML(s.name)}</div>
       <div><strong>Objetivo:</strong> ${RANGE_BY_GOAL[s.goal]?.label || s.goal}</div>
-      <div><strong>Nível:</strong> ${s.level}</div>
-      <div><strong>Data da prova:</strong> ${s.raceDate || '—'}</div>
+      <div><strong>Nível:</strong> ${escapeHTML(s.level)}</div>
+      <div><strong>Data da prova:</strong> ${escapeHTML(s.raceDate || '—')}</div>
       <div><strong>Duração do plano:</strong> ${plan.totalWeeks} semanas</div>
       <div><strong>Gerado em:</strong> ${generatedAt}</div>
     </div>
@@ -1477,7 +1492,7 @@ function viewEvolucao(s){
   const paces = plan? estimatePaces(s.recentDistM, s.recentTimeS) : null;
 
   return `
-  <div class="section-title"><h2>Evolução de ${s.name}</h2></div>
+  <div class="section-title"><h2>Evolução de ${escapeHTML(s.name)}</h2></div>
   <div class="grid grid-4" style="margin-bottom:18px;">
     <div class="tile"><div class="label">Volume total realizado</div><div class="value">${Math.round(totalKmReal)}<small> km</small></div></div>
     <div class="tile"><div class="label">Volume total planejado</div><div class="value">${Math.round(totalPlanned)}<small> km</small></div></div>
@@ -1502,7 +1517,7 @@ function viewEvolucao(s){
       <tr><td>5 km</td><td>${fmtTime(paces.predicted5k)}</td><td class="pace-tag">${fmtPace(paces.predicted5k/5)}</td></tr>
       <tr><td>10 km</td><td>${fmtTime(paces.predicted10k)}</td><td class="pace-tag">${fmtPace(paces.predicted10k/10)}</td></tr>
       </table>
-      <p class="hint">Margem de incerteza: estimativas do tipo Riegel costumam variar ±3 a 5% frente ao desempenho real, e pioram quanto mais distante a distância-alvo estiver do resultado usado como base. Dados usados: ${s.recentDistM} m em ${s.recentTimeS? fmtTime(s.recentTimeS): '—'}.</p>
+      <p class="hint">Margem de incerteza: estimativas do tipo Riegel costumam variar ±3 a 5% frente ao desempenho real, e pioram quanto mais distante a distância-alvo estiver do resultado usado como base. Dados usados: ${escapeHTML(s.recentDistM)} m em ${s.recentTimeS? fmtTime(s.recentTimeS): '—'}.</p>
     ` : `<p class="hint">Nenhum resultado recente foi informado, então nenhuma previsão numérica é apresentada aqui — o que evita inventar uma meta sem base. Um teste de campo (ex.: 2,4 km ou 12 minutos em esforço forte) permitiria estimativas futuras.</p>`}
   </div>`;
 }
@@ -1529,17 +1544,21 @@ function drawCharts(s){
   const carga = logs.map(l=> (l.durationReal||0) * (l.rpe||0));
   chartOrNone("chartCarga","line",{labels:cargaLabels,datasets:[{label:"Carga (min×Esforço)",data:carga,borderColor:"#3fa796",backgroundColor:"rgba(63,167,150,.15)",fill:true,tension:.3}]});
 
-  const paceLabels = logs.filter(l=>l.paceReal).map((l,i)=>"T"+(i+1));
-  const paceVals = logs.filter(l=>l.paceReal).map(l=>parsePaceToSec(l.paceReal)/60);
+  const paceLabels = logs.filter(l=>parsePaceToSec(l.paceReal) != null).map((l,i)=>"T"+(i+1));
+  const paceVals = logs.filter(l=>parsePaceToSec(l.paceReal) != null).map(l=>parsePaceToSec(l.paceReal)/60);
   chartOrNone("chartPace","line",{labels:paceLabels,datasets:[{label:"Ritmo (min/km)",data:paceVals,borderColor:"#c1341b",backgroundColor:"rgba(193,52,27,.12)",fill:true,tension:.3}]}, {reverse:true});
 
   const rpeBuckets = Array(11).fill(0);
-  logs.forEach(l=>{ if(l.rpe!=null) rpeBuckets[l.rpe]++; });
+  logs.forEach(l=>{ if(l.rpe!=null) rpeBuckets[Math.max(0, Math.min(10, Math.round(l.rpe)))]++; });
   chartOrNone("chartRpe","bar",{labels:rpeBuckets.map((_,i)=>i), datasets:[{label:"Nº de treinos",data:rpeBuckets,backgroundColor:"#d97a2b"}]});
 }
 let CHART_INSTANCES = {};
 function chartOrNone(id, type, data, yOpts){
   const el = document.getElementById(id); if(!el) return;
+  if(typeof Chart !== "function"){
+    const hint = document.createElement("p"); hint.className = "hint"; hint.textContent = "Gráfico indisponível. Confira a conexão e recarregue a página.";
+    el.replaceWith(hint); return;
+  }
   if(CHART_INSTANCES[id]) CHART_INSTANCES[id].destroy();
   CHART_INSTANCES[id] = new Chart(el, {
     type, data,
@@ -1565,9 +1584,9 @@ function viewListaAlunos(){
     <tr><th>Nome</th><th>Objetivo</th><th>Nível</th><th>Prova</th><th>Plano</th></tr>
     ${list.map(s=>{
       const p = Object.values(DB.plans).find(pp=>pp.studentId===s.id);
-      return `<tr data-student="${s.id}">
-        <td>${s.name}</td><td>${RANGE_BY_GOAL[s.goal]?.label||s.goal}</td>
-        <td>${s.level}</td><td>${s.raceDate||'—'}</td>
+      return `<tr data-student="${escapeHTML(s.id)}">
+        <td>${escapeHTML(s.name)}</td><td>${RANGE_BY_GOAL[s.goal]?.label||s.goal}</td>
+        <td>${escapeHTML(s.level)}</td><td>${escapeHTML(s.raceDate||'—')}</td>
         <td>${p? (isPublished(p)? '<span class="badge ok">Publicado</span>':'<span class="badge warn">Rascunho</span>') : '<span class="badge muted">Sem plano</span>'}</td>
       </tr>`;
     }).join("")}
@@ -1579,13 +1598,13 @@ function viewPlanoTreinador(){
   const s = currentStudent();
   if(!s) return `<div class="empty">Selecione um aluno na barra lateral.</div>`;
   const plan = currentPlan();
-  if(!plan) return `<div class="empty">${s.name} ainda não tem uma planilha.<br>
+  if(!plan) return `<div class="empty">${escapeHTML(s.name)} ainda não tem uma planilha.<br>
     <div class="btn-row" style="justify-content:center;margin-top:14px;">
       <button class="btn" id="btnGerarPlano">Gerar sugestão automática</button>
       <button class="btn secondary" id="btnCriarZero">Criar plano do zero</button>
     </div></div>`;
-  UI.week = UI.week || 1;
   const week = plan.weeks.find(w=>w.weekNumber===UI.week) || plan.weeks[0];
+  UI.week = week.weekNumber;
   const alerts = computeAlerts(s, plan, DB.logs);
 
   const strip = plan.weeks.map(w=>`<div class="week-pill ${w.weekNumber===week.weekNumber?'active':''} ${w.isDeload?'deload':''}" data-week="${w.weekNumber}"><span class="n">S${w.weekNumber}</span>${w.isTaper?'polimento':w.isDeload?'regen.':w.phase.replace('-',' ')}</div>`).join("");
@@ -1593,44 +1612,44 @@ function viewPlanoTreinador(){
   const weekOptions = plan.weeks.map(w=>`<option value="${w.weekNumber}">Semana ${w.weekNumber}</option>`).join("");
   const typeOptions = SESSION_TYPES.map(([v,l])=>`<option value="${v}">${l}</option>`).join("");
 
-  const sortedSessions = [...week.sessions].sort((a,b)=>WEEKDAY_SORT_ORDER(a.day)-WEEKDAY_SORT_ORDER(b.day));
+  const sortedSessions = week.sessions;
   const dayCounts = {};
   sortedSessions.forEach(ses=>{ dayCounts[ses.day] = (dayCounts[ses.day]||0)+1; });
   const sessionsHtml = sortedSessions.map((ses,idx)=>`
-    <div class="session" data-ses="${ses.id}">
-      <div class="session-head" data-toggle="${ses.id}">
-        <div><div class="day">${ses.day}${dayCounts[ses.day]>1? ' <span class="badge warn" title="Mais de um treino caiu neste dia">2 treinos</span>' : ''}</div><h4>${ses.name}</h4></div>
+    <div class="session" data-ses="${escapeHTML(ses.id)}">
+      <div class="session-head" data-toggle="${escapeHTML(ses.id)}">
+        <div><div class="day">${escapeHTML(ses.day)}${dayCounts[ses.day]>1? ' <span class="badge warn" title="Mais de um treino caiu neste dia">'+dayCounts[ses.day]+' treinos</span>' : ''}</div><h4>${escapeHTML(ses.name)}</h4></div>
       </div>
       <div class="session-meta">
-        <span>⏱ ${ses.duration||'—'} min</span><span>📏 ${ses.distance? fmtKm(ses.distance):'—'}</span>
-        <span class="pace-tag">🏃 ${ses.pace}</span><span>Esforço ${ses.rpe}</span>
+        <span>⏱ ${escapeHTML(ses.duration||'—')} min</span><span>📏 ${ses.distance? fmtKm(ses.distance):'—'}</span>
+        <span class="pace-tag">🏃 ${escapeHTML(ses.pace)}</span><span>Esforço ${escapeHTML(ses.rpe)}</span>
       </div>
       <div class="session-body">
         <div class="grid grid-3">
-          <div class="field"><label>Nome do treino</label><input data-edit="name" data-ses="${ses.id}" value="${ses.name}"></div>
-          <div class="field"><label>Dia</label><input data-edit="day" data-ses="${ses.id}" value="${ses.day}"></div>
-          <div class="field"><label>Objetivo</label><input data-edit="objective" data-ses="${ses.id}" value="${ses.objective||''}"></div>
+          <div class="field"><label>Nome do treino</label><input data-edit="name" data-ses="${escapeHTML(ses.id)}" value="${escapeHTML(ses.name)}"></div>
+          <div class="field"><label>Dia</label><input data-edit="day" data-ses="${escapeHTML(ses.id)}" value="${escapeHTML(ses.day)}"></div>
+          <div class="field"><label>Objetivo</label><input data-edit="objective" data-ses="${escapeHTML(ses.id)}" value="${escapeHTML(ses.objective||'')}"></div>
         </div>
-        <div class="field"><label>Aquecimento</label><textarea data-edit="warmup" data-ses="${ses.id}" rows="1">${ses.warmup||''}</textarea></div>
-        <div class="field"><label>Parte principal</label><textarea data-edit="main" data-ses="${ses.id}" rows="2">${ses.main}</textarea></div>
-        <div class="field"><label>Desaquecimento</label><textarea data-edit="cooldown" data-ses="${ses.id}" rows="1">${ses.cooldown||''}</textarea></div>
+        <div class="field"><label>Aquecimento</label><textarea data-edit="warmup" data-ses="${escapeHTML(ses.id)}" rows="1">${escapeHTML(ses.warmup||'')}</textarea></div>
+        <div class="field"><label>Parte principal</label><textarea data-edit="main" data-ses="${escapeHTML(ses.id)}" rows="2">${escapeHTML(ses.main)}</textarea></div>
+        <div class="field"><label>Desaquecimento</label><textarea data-edit="cooldown" data-ses="${escapeHTML(ses.id)}" rows="1">${escapeHTML(ses.cooldown||'')}</textarea></div>
         <div class="grid grid-4">
-          <div class="field"><label>Distância (km)</label><input type="number" step="0.1" data-edit="distance" data-ses="${ses.id}" value="${ses.distance??''}"></div>
-          <div class="field"><label>Duração (min)</label><input type="number" data-edit="duration" data-ses="${ses.id}" value="${ses.duration??''}"></div>
-          <div class="field"><label>Ritmo / FC / esforço</label><input data-edit="pace" data-ses="${ses.id}" value="${ses.pace||''}"></div>
-          <div class="field"><label>Esforço</label><input data-edit="rpe" data-ses="${ses.id}" value="${ses.rpe||''}"></div>
+          <div class="field"><label>Distância (km)</label><input type="number" step="0.1" data-edit="distance" data-ses="${escapeHTML(ses.id)}" value="${escapeHTML(ses.distance??'')}"></div>
+          <div class="field"><label>Duração (min)</label><input type="number" data-edit="duration" data-ses="${escapeHTML(ses.id)}" value="${escapeHTML(ses.duration??'')}"></div>
+          <div class="field"><label>Ritmo / FC / esforço</label><input data-edit="pace" data-ses="${escapeHTML(ses.id)}" value="${escapeHTML(ses.pace||'')}"></div>
+          <div class="field"><label>Esforço</label><input data-edit="rpe" data-ses="${escapeHTML(ses.id)}" value="${escapeHTML(ses.rpe||'')}"></div>
         </div>
         <div class="grid grid-2">
-          <div class="field"><label>Zona de FC</label><input data-edit="hrZone" data-ses="${ses.id}" value="${ses.hrZone||''}"></div>
-          <div class="field"><label>Intervalos / recuperação</label><input data-edit="recovery" data-ses="${ses.id}" value="${ses.recovery||''}"></div>
+          <div class="field"><label>Zona de FC</label><input data-edit="hrZone" data-ses="${escapeHTML(ses.id)}" value="${escapeHTML(ses.hrZone||'')}"></div>
+          <div class="field"><label>Intervalos / recuperação</label><input data-edit="recovery" data-ses="${escapeHTML(ses.id)}" value="${escapeHTML(ses.recovery||'')}"></div>
         </div>
-        <div class="field"><label>Observações do treinador</label><textarea data-edit="notes" data-ses="${ses.id}" rows="2">${ses.notes}</textarea></div>
+        <div class="field"><label>Observações do treinador</label><textarea data-edit="notes" data-ses="${escapeHTML(ses.id)}" rows="2">${escapeHTML(ses.notes)}</textarea></div>
         <div class="btn-row no-print" style="margin-top:6px;">
-          <button class="btn secondary" data-dup-ses="${ses.id}">Duplicar</button>
-          <button class="btn danger" data-del-ses="${ses.id}">Excluir</button>
-          <button class="btn secondary" data-move-ses="${ses.id}" data-dir="-1" ${idx===0?'disabled':''}>▲ Mover</button>
-          <button class="btn secondary" data-move-ses="${ses.id}" data-dir="1" ${idx===week.sessions.length-1?'disabled':''}>▼ Mover</button>
-          <select data-goto-week="${ses.id}" style="width:auto;">
+          <button class="btn secondary" data-dup-ses="${escapeHTML(ses.id)}">Duplicar</button>
+          <button class="btn danger" data-del-ses="${escapeHTML(ses.id)}">Excluir</button>
+          <button class="btn secondary" data-move-ses="${escapeHTML(ses.id)}" data-dir="-1" ${idx===0?'disabled':''}>▲ Mover</button>
+          <button class="btn secondary" data-move-ses="${escapeHTML(ses.id)}" data-dir="1" ${idx===week.sessions.length-1?'disabled':''}>▼ Mover</button>
+          <select data-goto-week="${escapeHTML(ses.id)}" style="width:auto;">
             <option value="">Reagendar p/ semana…</option>${weekOptions}
           </select>
         </div>
@@ -1638,7 +1657,7 @@ function viewPlanoTreinador(){
     </div>`).join("");
 
   return `
-  <div class="section-title"><h2>Plano de ${s.name}</h2>
+  <div class="section-title"><h2>Plano de ${escapeHTML(s.name)}</h2>
     <span class="count">${isPublished(plan)? '<span class="badge ok">Publicado para o aluno</span>' : '<span class="badge warn">Rascunho — aluno ainda não vê este plano</span>'}</span>
   </div>
   ${alerts.map(a=>`<div class="alert ${a.level==='warn'?'warn':''}"><div class="t">${a.title}</div>${a.text}</div>`).join("")}
@@ -1668,12 +1687,12 @@ function viewComparar(){
   const list = Object.values(DB.students);
   if(list.length < 1) return `<div class="empty">Cadastre ao menos um aluno para comparar.</div>`;
   const rows = list.map(s=>{
-    const plan = Object.values(DB.plans).find(p=>p.studentId===s.id);
+    const plan = planForStudent(s.id);
     const logs = Object.values(DB.logs).filter(l=>l.studentId===s.id);
     const done = logs.filter(l=>l.status==='concluido' || l.status==='parcial');
     const kmReal = done.reduce((a,l)=>a+(l.distanceReal||0),0);
     const adherence = logs.length? Math.round(done.length / logs.length * 100) : 0;
-    return `<tr><td>${s.name}</td><td>${RANGE_BY_GOAL[s.goal]?.label||s.goal}</td><td>${plan?plan.totalWeeks+' sem.':'—'}</td><td>${Math.round(kmReal)} km</td><td>${adherence}%</td></tr>`;
+    return `<tr><td>${escapeHTML(s.name)}</td><td>${RANGE_BY_GOAL[s.goal]?.label||s.goal}</td><td>${plan?plan.totalWeeks+' sem.':'—'}</td><td>${Math.round(kmReal)} km</td><td>${adherence}%</td></tr>`;
   }).join("");
   return `<div class="section-title"><h2>Comparar alunos</h2></div>
   <table><tr><th>Aluno</th><th>Objetivo</th><th>Duração do plano</th><th>Volume realizado</th><th>Aderência</th></tr>${rows}</table>`;
@@ -1686,7 +1705,7 @@ function viewModelos(){
   <p class="hint" style="margin-bottom:14px;">Planos marcados como modelo por "Duplicar como modelo" na tela de um aluno. Use-os como ponto de partida para novos alunos com objetivo semelhante.</p>
   ${templates.length===0? `<div class="empty">Nenhum modelo salvo ainda. Gere um plano para um aluno e use "Duplicar como modelo".</div>` :
   `<table><tr><th>Nome do modelo</th><th>Objetivo</th><th>Duração</th></tr>
-  ${templates.map(t=>`<tr><td>${t.templateName}</td><td>${RANGE_BY_GOAL[t.goal]?.label}</td><td>${t.totalWeeks} semanas</td></tr>`).join("")}</table>`}`;
+  ${templates.map(t=>`<tr><td>${escapeHTML(t.templateName)}</td><td>${RANGE_BY_GOAL[t.goal]?.label}</td><td>${escapeHTML(t.totalWeeks)} semanas</td></tr>`).join("")}</table>`}`;
 }
 
 /* ============================ VIEW: BASE CIENTÍFICA ============================ */
@@ -1740,10 +1759,19 @@ function viewBase(){
 }
 
 /* ============================ EVENTOS ============================ */
+function validateStudent(student, fd){
+  if(!student.name || !Number.isFinite(student.age) || student.age < 10 || student.age > 90 || !RANGE_BY_GOAL[student.goal] || ![2,3,4].includes(student.freq)){
+    showToast("Confira nome, idade, objetivo e frequência."); return false;
+  }
+  if((fd.get("recentTimeStr") && !student.recentTimeS) || (!!student.recentDistM !== !!student.recentTimeS) || (student.recentDistM != null && student.recentDistM <= 0)){
+    showToast("Informe distância positiva e tempo válido juntos (mm:ss ou hh:mm:ss)."); return false;
+  }
+  return true;
+}
 function studentFromForm(fd, id, createdAt){
   const recentTimeS = parseTimeStr(fd.get("recentTimeStr"));
   return {
-    id, name: fd.get("name"), age:+fd.get("age"), sex: fd.get("sex"), weight:+fd.get("weight")||null,
+    id, name: String(fd.get("name") || "").trim(), age:+fd.get("age"), sex: fd.get("sex"), weight:+fd.get("weight")||null,
     level: fd.get("level"), goal: fd.get("goal"), raceDate: fd.get("raceDate")||null,
     freq: +fd.get("freq"), availableDays: Array.from(new Set((fd.get("days")||"").split(",").map(x=>x.trim()).filter(Boolean))),
     experience: fd.get("experience"), recentVolumeKm: +fd.get("recentVolumeKm")||0,
@@ -1763,8 +1791,10 @@ function bindViewEvents(){
     formAval.onsubmit = (e)=>{
       e.preventDefault();
       const fd = new FormData(formAval);
-      const id = (DB.config.role==="treinador" && !currentStudent()) ? uid("stu") : (currentStudent()?.id || uid("stu"));
+      const id = (DB.config.role === "treinador" || UI.view === "novo_aluno") ? uid("stu") : (currentStudent()?.id || uid("stu"));
       const student = studentFromForm(fd, id);
+      if(!validateStudent(student, fd)) return;
+      Object.keys(DB.plans).forEach(pid=>{ if(DB.plans[pid].studentId === id && !DB.plans[pid].isTemplate) delete DB.plans[pid]; });
       DB.students[id] = student;
       const plan = generatePlan(student);
       DB.plans[plan.id] = plan;
@@ -1783,6 +1813,7 @@ function bindViewEvents(){
       if(!s) return null;
       const fd = new FormData(formEditar);
       const student = studentFromForm(fd, s.id, s.createdAt);
+      if(!validateStudent(student, fd)) return null;
       DB.students[s.id] = student;
       return student;
     };
@@ -1792,12 +1823,13 @@ function bindViewEvents(){
     };
     const btnRegerar = document.getElementById("btnSalvarRegerar");
     if(btnRegerar) btnRegerar.onclick = ()=>{
+      if(!formEditar.reportValidity()) return;
       if(!confirm("Isso substitui a planilha atual deste aluno (o histórico de registros continua salvo). Continuar?")) return;
       const student = doSave();
       if(!student) return;
       // Remove a(s) planilha(s) anterior(es) do aluno para não deixar
       // planos órfãos — a busca por plano usa o primeiro encontrado.
-      Object.keys(DB.plans).forEach(pid=>{ if(DB.plans[pid].studentId === student.id) delete DB.plans[pid]; });
+      Object.keys(DB.plans).forEach(pid=>{ if(DB.plans[pid].studentId === student.id && !DB.plans[pid].isTemplate) delete DB.plans[pid]; });
       const plan = generatePlan(student);
       DB.plans[plan.id] = plan;
       UI.view = "plano_editar"; UI.week = 1;
@@ -1827,18 +1859,20 @@ function bindViewEvents(){
   main.querySelectorAll("[data-save]").forEach(b=>{
     b.onclick = ()=>{
       const sesId = b.dataset.save, s = currentStudent();
+      const values = {};
+      const fields = {distanceReal:["d_",0,Infinity], durationReal:["du_",0,Infinity], hr:["hr_",0,300], rpe:["rpe_",0,10], pain:["pain_",0,10], fatigue:["fat_",0,10], sleep:["sleep_",0,5], satisfaction:["sat_",0,5]};
+      for(const [field,[prefix,min,max]] of Object.entries(fields)){
+        const el = document.getElementById(prefix+sesId);
+        const value = el.value.trim() === "" ? null : Number(el.value);
+        if(el.validity?.badInput || (value !== null && (!Number.isFinite(value) || value < min || value > max))){ showToast("Confira os valores do registro e os limites indicados."); el.focus(); return; }
+        values[field] = value;
+      }
+      values.paceReal = document.getElementById("p_"+sesId).value.trim() || null;
+      if(values.paceReal && parsePaceToSec(values.paceReal) == null){ showToast("Informe um ritmo válido em mm:ss."); return; }
+      values.notes = document.getElementById("notes_"+sesId).value;
       let log = Object.values(DB.logs).find(l=>l.studentId===s.id && l.sessionId===sesId);
       if(!log){ log = {id:uid("log"), studentId:s.id, sessionId:sesId, date:new Date().toISOString(), status:"concluido"}; DB.logs[log.id]=log; }
-      log.distanceReal = +document.getElementById("d_"+sesId).value || null;
-      log.durationReal = +document.getElementById("du_"+sesId).value || null;
-      log.paceReal = document.getElementById("p_"+sesId).value || null;
-      log.hr = +document.getElementById("hr_"+sesId).value || null;
-      log.rpe = +document.getElementById("rpe_"+sesId).value; if(isNaN(log.rpe)) log.rpe=null;
-      log.pain = +document.getElementById("pain_"+sesId).value; if(isNaN(log.pain)) log.pain=null;
-      log.fatigue = +document.getElementById("fat_"+sesId).value; if(isNaN(log.fatigue)) log.fatigue=null;
-      log.sleep = +document.getElementById("sleep_"+sesId).value; if(isNaN(log.sleep)) log.sleep=null;
-      log.satisfaction = +document.getElementById("sat_"+sesId).value; if(isNaN(log.satisfaction)) log.satisfaction=null;
-      log.notes = document.getElementById("notes_"+sesId).value;
+      Object.assign(log, values);
       saveDB(); showToast("Registro salvo."); render();
     };
   });
@@ -1859,7 +1893,11 @@ function bindViewEvents(){
       for(const w of plan.weeks){
         const ses = w.sessions.find(x=>x.id===sesId);
         if(ses){
-          ses[field] = (field==="distance"||field==="duration") ? (+inp.value||null) : inp.value;
+          if(field === "distance" || field === "duration"){
+            const value = inp.value.trim() === "" ? null : Number(inp.value);
+            if(inp.validity?.badInput || (value !== null && (!Number.isFinite(value) || value < 0))){ showToast("Informe um valor numérico maior ou igual a zero."); inp.value = ses[field] ?? ""; return; }
+            ses[field] = value;
+          }else ses[field] = inp.value;
           plan.edited = true;
           w.totalKm = Math.round(w.sessions.reduce((a,s)=>a+(s.distance||0),0)*10)/10;
         }
@@ -1904,7 +1942,7 @@ function bindViewEvents(){
   });
   main.querySelectorAll("[data-goto-week]").forEach(sel=>{
     sel.onchange = ()=>{
-      const plan = currentPlan(); const sesId = sel.dataset.gotoWeek; const targetWeek = +sel.value; if(!targetWeek) return;
+      const plan = currentPlan(); const sesId = sel.dataset.gotoWeek; const targetWeek = +sel.value; if(!targetWeek || !plan.weeks.some(w=>w.weekNumber===targetWeek)) return;
       let moved = null;
       for(const w of plan.weeks){
         const idx = w.sessions.findIndex(x=>x.id===sesId);
@@ -1917,7 +1955,7 @@ function bindViewEvents(){
   });
   const btnAddSes = document.getElementById("btnAddSes");
   if(btnAddSes) btnAddSes.onclick = ()=>{
-    const plan = currentPlan(); const week = plan.weeks.find(w=>w.weekNumber===(UI.week||1));
+    const plan = currentPlan(); const week = plan.weeks.find(w=>w.weekNumber===(UI.week||1)) || plan.weeks[0];
     const type = document.getElementById("newSesType").value;
     const day = document.getElementById("newSesDay").value || "—";
     week.sessions.push(newSessionFromTemplate(type, day));
@@ -1928,7 +1966,7 @@ function bindViewEvents(){
   if(btnNovoAluno) btnNovoAluno.onclick = ()=>{ DB.config.activeStudentId=null; UI.view="novo_aluno"; render(); };
 
   main.querySelectorAll("tr[data-student]").forEach(row=>{
-    row.onclick = ()=>{ DB.config.activeStudentId = row.dataset.student; UI.view="plano_editar"; saveDB(); render(); };
+    row.onclick = ()=>{ DB.config.activeStudentId = row.dataset.student; UI.week = 1; UI.view="plano_editar"; saveDB(); render(); };
   });
 
   const btnGerarPlano = document.getElementById("btnGerarPlano");
@@ -1940,7 +1978,8 @@ function bindViewEvents(){
   if(btnCriarZero) btnCriarZero.onclick = ()=>{
     const s = currentStudent();
     const weeksStr = prompt("Quantas semanas terá o plano?", RANGE_BY_GOAL[s.goal]?.default || 8);
-    const totalWeeks = Math.max(1, Math.min(24, +weeksStr || 8));
+    if(weeksStr === null) return;
+    const totalWeeks = Math.max(1, Math.min(24, Math.floor(+weeksStr || 8)));
     const plan = createBlankPlan(s, totalWeeks); DB.plans[plan.id]=plan; saveDB(); render();
     showToast("Plano em branco criado — adicione os treinos semana a semana.");
   };
@@ -1951,6 +1990,7 @@ function bindViewEvents(){
   const btnRegerar = document.getElementById("btnRegerar");
   if(btnRegerar) btnRegerar.onclick = ()=>{
     const s = currentStudent();
+    if(!confirm("Substituir a planilha atual por uma nova sugestão?")) return;
     const old = currentPlan(); if(old) delete DB.plans[old.id];
     const plan = generatePlan(s); DB.plans[plan.id]=plan; saveDB(); render();
     showToast("Nova sugestão gerada como rascunho — revise antes de publicar.");
@@ -1959,7 +1999,7 @@ function bindViewEvents(){
   if(btnDuplicar) btnDuplicar.onclick = ()=>{
     const plan = currentPlan(); const name = prompt("Nome do modelo:", RANGE_BY_GOAL[plan.goal].label + " — " + plan.level);
     if(!name) return;
-    const copy = JSON.parse(JSON.stringify(plan)); copy.id = uid("plan"); copy.isTemplate = true; copy.templateName = name;
+    const copy = JSON.parse(JSON.stringify(plan)); copy.id = uid("plan"); copy.studentId = null; copy.isTemplate = true; copy.published = false; copy.templateName = name;
     DB.plans[copy.id] = copy; saveDB(); showToast("Modelo salvo.");
   };
   const btnExportCsv = document.getElementById("btnExportCsv");
@@ -1986,8 +2026,10 @@ function exportCsv(s, plan){
   const csv = rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(",")).join("\n");
   const blob = new Blob(["\uFEFF"+csv], {type:"text/csv;charset=utf-8;"});
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob); a.download = `planilha_${s.name.replace(/\s+/g,'_')}.csv`;
+  const url = URL.createObjectURL(blob);
+  a.href = url; a.download = `planilha_${s.name.replace(/\s+/g,'_')}.csv`;
   document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
 }
 
 init();
