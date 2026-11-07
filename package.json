@@ -1,0 +1,14 @@
+{
+  "name": "tao-planilhas",
+  "version": "1.0.0",
+  "private": true,
+  "description": "TAO Performance — Planejamento de Corrida",
+  "scripts": {
+    "start": "node scripts/serve.mjs",
+    "check": "node scripts/check.mjs",
+    "test": "npm run check"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

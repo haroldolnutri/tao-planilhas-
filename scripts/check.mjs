@@ -1,0 +1,12 @@
+import { readFileSync } from 'node:fs';
+import { Script } from 'node:vm';
+import assert from 'node:assert/strict';
+const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+assert.match(html, /<!doctype html>/i, 'DOCTYPE ausente');
+assert.match(html, /<html[^>]+lang="pt-BR"/i, 'Idioma ausente');
+assert.match(html, /<meta[^>]+name="viewport"/i, 'Viewport ausente');
+assert.match(html, /id="app"/, 'Elemento principal ausente');
+const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)].filter(([, attrs]) => !/\bsrc\s*=/i.test(attrs));
+assert.ok(scripts.length, 'JavaScript da aplicação ausente');
+scripts.forEach(([, , code], i) => new Script(code, { filename: `inline-${i + 1}.js` }));
+console.log(`HTML e sintaxe de ${scripts.length} script(s) validados.`);
