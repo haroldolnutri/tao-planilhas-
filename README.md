@@ -39,6 +39,18 @@ Fontes do Google Fonts e gráficos do Chart.js 4.4.0 são carregados por serviç
 
 ## Hospedagem
 
-O projeto é estático: basta servir `index.html` na raiz de uma hospedagem HTTPS. Não há etapa de build nem variáveis secretas a configurar. Esta configuração não publica o sistema automaticamente.
+O projeto é estático: basta servir `index.html` na raiz de uma hospedagem HTTPS. Não há etapa de build nem variáveis secretas a configurar. A publicação pelo GitHub Pages é realizada pelo workflow `.github/workflows/pages.yml`, após a ativação do serviço nas configurações do repositório.
 
 Antes de usar dados reais em um ambiente compartilhado, implemente autenticação, autorização e armazenamento adequado no servidor.
+
+## Ativar GitHub Pages
+
+1. Abra Settings → Pages no repositório.
+2. Em Build and deployment → Source, selecione **GitHub Actions**.
+3. Em Actions → Publicar no GitHub Pages → Run workflow, execute o workflow na branch `main`.
+
+Após a ativação, alterações em `index.html` na branch `main` são publicadas automaticamente. O workflow envia somente os arquivos públicos da aplicação, sem scripts de desenvolvimento ou documentação.
+
+Se a opção Pages não estiver disponível por causa do plano da conta e da visibilidade privada do repositório, revise as opções exibidas pelo GitHub. A configuração não altera a visibilidade do repositório.
+
+Consulte o endereço final na etapa de publicação ou em Settings → Pages.
